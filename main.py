@@ -216,10 +216,10 @@ def model_train(train_generator):
 			save_dir = os.path.join(args.save_dir, 'iter_%d'%(iteration))
 			if not os.path.exists(save_dir):
 				os.makedirs(save_dir)
-			content_encoder.save_state_dict(os.path.join(save_dir,'content_encoder.pth'))
-			pose_encoder.save_state_dict(os.path.join(save_dir,'pose_encoder.pth'))
-			decoder.save_state_dict(os.path.join(save_dir,'decoder.pth'))
-			scene_discriminator.save_state_dict(os.path.join(save_dir,'scene_discriminator.pth'))
+			torch.save(content_encoder.state_dict(),os.path.join(save_dir,'content_encoder.pth'))
+			torch.save(pose_encoder.state_dict(),os.path.join(save_dir,'pose_encoder.pth'))
+			torch.save(decoder.state_dict(),os.path.join(save_dir,'decoder.pth'))
+			torch.save(scene_discriminator.state_dict(),os.path.join(save_dir,'scene_discriminator.pth'))
 
 '''
 training the LSTM network
@@ -284,11 +284,12 @@ if __name__ == '__main__':
 
 	# is start_iter is not zero, then load the model from the given iteration
 	if args.start_iter != 0:
-		content_encoder.load_state_dict(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'content_encoder.pth'), strict=False)
-		pose_encoder.load_state_dict(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'pose_encoder.pth'), strict=False)
-		decoder.load_state_dict(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'decoder.pth'), strict=False)
-		scene_discriminator.load_state_dict(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'scene_discriminator.pth'), strict=False)
-		lstm.load_state_dict(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'lstm.pth'), strict=False)
+		content_encoder.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'content_encoder.pth')), strict=False)
+		pose_encoder.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'pose_encoder.pth')), strict=False)
+		decoder.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'decoder.pth')), strict=False)
+		scene_discriminator.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'scene_discriminator.pth')), strict=False)
+                if args.use_lstm:
+		    lstm.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'lstm.pth')), strict=False)
 
 	if args.use_lstm:
 		model_lstm_train(train_generator)
