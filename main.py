@@ -11,6 +11,8 @@ import torch.optim as optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
+from tensorboardX import SummaryWriter
+
 import os
 import numpy as np
 import argparse
@@ -23,6 +25,8 @@ import models.lstm as lstm
 import models.scene_discriminator as scene_discriminator
 
 from data_loader import loader
+
+
 
 parser = argparse.ArgumentParser()
 
@@ -56,14 +60,23 @@ parser.add_argument('--n_future', type=int, default=10, help='number of frames t
 parser.add_argument('--rnn_size', type=int, default=256, help='dimensionality of hidden layer')
 parser.add_argument('--rnn_layers', type=int, default=2, help='number of layers')
 parser.add_argument('--use_lstm', type=bool, default=False, help='whether to use lstm')
+parser.add_argument('--tensorboard', type=str, default='./tensorboard', help='where to store tensorboard')
 
 args = parser.parse_args()
 
 torch.cuda.set_device(args.gpu)
 
+writer_train = SummaryWriter(os.path.join(args.tensorboard,'train'))
+writer_test = SummaryWriter(os.path.join(args.tensorboard,'test'))
+
 # load the content_encoder, pose_encoder, decoder, scene_discriminator and lstm
 # as per the required specifications
-if args.dataset == 'mnist':
+if args.dataset == 'cars':
+    content_encoder = dc_gan.Encoder(args.channels, args.content_dim)
+    pose_encoder = dc_gan.Encoder(args.channels, args.pose_dim)
+    decoder = dc_gan.Decoder(args.content_dim + args.pose_dim, args.channels,    args.use_skip)
+
+elif args.dataset == 'mnist':
 	content_encoder = dc_gan.Encoder(args.channels, args.content_dim)
 	pose_encoder = dc_gan.Encoder(args.channels, args.pose_dim)
 	decoder = dc_gan.Decoder(args.content_dim + args.pose_dim, args.channels, args.use_skip)
@@ -103,7 +116,7 @@ bce_loss.cuda()
 training the discriminator
 '''
 def train_scene_discriminator(x):
-	scene_discriminator.zero_grad()
+        scene_discriminator.zero_grad()
 
 	target = torch.cuda.FloatTensor(args.batch_size, 1)
 	# in accordance with the input to the discriminator
@@ -137,6 +150,43 @@ def train_scene_discriminator(x):
 	# return the bce and accuracy values after taking mean across the batch
 	return bce.data/args.batch_size, acc.data/args.batch_size
 
+def test_main_network(x):
+	
+        with torch.no_grad():
+	
+        # in accordance with the input specifications
+            x_c1 = x[0]
+	    x_c2 = x[1]
+	    x_p1 = x[2]
+	    x_p2 = x[3]
+
+	    h_c1, skip1 = content_encoder(x_c1)
+    	    h_c2, skip2 = content_encoder(x_c2)
+	    h_c2 = h_c2.detach()
+	    h_p1 = pose_encoder(x_p1)[0]
+	    h_p2 = pose_encoder(x_p2)[0].detach()
+
+	    # similarity loss: ||h_c1 - h_c2||
+	    sim_loss = mse_loss(h_c1, h_c2)
+
+	    # reconstruction loss: ||D(h_c1, h_p1), x_p1|| 
+	    rec = decoder(h_c1, skip1, h_p1)
+	    rec_loss = mse_loss(rec, x_p1)
+            writer_test.add_embedding(h_p1.squeeze(), label_img=(rec),global_step=iteration)
+
+
+	    # scene discriminator loss
+	    target = torch.cuda.FloatTensor(args.batch_size, 1).fill_(0.5)
+	    out = scene_discriminator(h_p1, h_p2)
+	    sd_loss = bce_loss(out, Variable(target))
+
+	    # full loss
+	    loss = sim_loss + args.alpha*rec_loss + args.beta*sd_loss
+
+
+	# return the similarity and reconstruction loss
+	return sim_loss.data/args.batch_size, rec_loss.data/args.batch_size
+
 '''
 training the main network consisting of content encoder, pose encoder and decoder
 '''
@@ -163,6 +213,12 @@ def train_main_network(x):
 	# reconstruction loss: ||D(h_c1, h_p1), x_p1|| 
 	rec = decoder(h_c1, skip1, h_p1)
 	rec_loss = mse_loss(rec, x_p1)
+        #print h_p1[0].squeeze().shape,rec.shape
+        #print x_p1
+        #print '-'*30
+        #print rec
+        writer_train.add_embedding(h_p1.squeeze(), label_img=(rec),global_step=iteration)
+
 
 	# scene discriminator loss
 	target = torch.cuda.FloatTensor(args.batch_size, 1).fill_(0.5)
@@ -190,10 +246,12 @@ def model_train(train_generator):
 	pose_encoder.train()
 	decoder.train()
 	scene_discriminator.train()
+        global iteration 
+	
+        for iteration in range(args.max_iter):
 
-	for iteration in range(args.max_iter):
-
-		x = next(train_generator) # get the next input batch
+		
+                x = next(train_generator) # get the next input batch
 
 		# train scene discriminator
 		sd_loss, sd_acc = train_scene_discriminator(x)
@@ -213,7 +271,36 @@ def model_train(train_generator):
 
 		# save the model weights for each of the components
 		if iteration % args.save_iters == 0:
-			save_dir = os.path.join(args.save_dir, 'iter_%d'%(iteration))
+			
+	                content_encoder.eval()
+	                pose_encoder.eval()
+	                decoder.eval()
+	                scene_discriminator.eval()
+                        global iteration_test 
+	
+                        for iteration_tets in range(args.max_iter):
+
+		
+                            x = next(train_generator) # get the next input batch
+
+	                	# train scene discriminator
+		            sd_loss, sd_acc = train_scene_discriminator(x)
+
+		            # train the main network
+		            sim_loss, rec_loss = train_main_network(x)
+
+		            iteration += 1
+
+		            # display the values
+		            print ('iteration: %d, sim loss: %0.8f, rec loss: %0.8f, sd loss: %0.8f, sd acc: %0.8f' 
+				%(iteration, sim_loss, rec_loss, sd_loss, sd_acc))
+
+		            # save the values in an external file which can be plotted later
+		            with open(os.path.join('saved_values', 'loss_and_acc_%s.txt'%(args.dataset)), mode='a') as f:
+			            f.write('%0.8f %0.8f %0.8f %0.8f\n'%(sim_loss, rec_loss, sd_loss, sd_acc))
+    
+                    
+                        save_dir = os.path.join(args.save_dir, 'iter_%d'%(iteration))
 			if not os.path.exists(save_dir):
 				os.makedirs(save_dir)
 			torch.save(content_encoder.state_dict(),os.path.join(save_dir,'content_encoder.pth'))
