@@ -25,7 +25,7 @@ import models.lstm as lstm
 import models.scene_discriminator as scene_discriminator
 
 from data_loader import loader
-
+import utils
 
 
 parser = argparse.ArgumentParser()
@@ -44,6 +44,7 @@ parser.add_argument('--save_dir', type=str, default='saved_models', help='direct
 parser.add_argument('--start_iter', type=int, default=0, help='load the saved model from given iteration')
 parser.add_argument('--max_iter', type=int, default=50000, help='total no. of iters to train the model')
 parser.add_argument('--batch_size', type=int, default=32)
+parser.add_argument('--batch_size_test', type=int, default=64)
 parser.add_argument('--data_root', default='', help='root directory for data')
 parser.add_argument('--max_step', type=int, default=20, help='maximum distance between frames')
 parser.add_argument('--seed', default=1, type=int, help='manual seed')
@@ -152,16 +153,15 @@ def train_scene_discriminator(x):
 
 def test_main_network(x):
 	
-        with torch.no_grad():
+    with torch.no_grad():
 	
-        # in accordance with the input specifications
-            x_c1 = x[0]
+        x_c1 = x[0]
 	    x_c2 = x[1]
 	    x_p1 = x[2]
 	    x_p2 = x[3]
 
 	    h_c1, skip1 = content_encoder(x_c1)
-    	    h_c2, skip2 = content_encoder(x_c2)
+    	h_c2, skip2 = content_encoder(x_c2)
 	    h_c2 = h_c2.detach()
 	    h_p1 = pose_encoder(x_p1)[0]
 	    h_p2 = pose_encoder(x_p2)[0].detach()
@@ -172,20 +172,9 @@ def test_main_network(x):
 	    # reconstruction loss: ||D(h_c1, h_p1), x_p1|| 
 	    rec = decoder(h_c1, skip1, h_p1)
 	    rec_loss = mse_loss(rec, x_p1)
-            writer_test.add_embedding(h_p1.squeeze(), label_img=(rec),global_step=iteration)
+        # writer_test.add_embedding(h_p1.squeeze(), label_img=(rec),global_step=iteration)
 
-
-	    # scene discriminator loss
-	    target = torch.cuda.FloatTensor(args.batch_size, 1).fill_(0.5)
-	    out = scene_discriminator(h_p1, h_p2)
-	    sd_loss = bce_loss(out, Variable(target))
-
-	    # full loss
-	    loss = sim_loss + args.alpha*rec_loss + args.beta*sd_loss
-
-
-	# return the similarity and reconstruction loss
-	return sim_loss.data/args.batch_size, rec_loss.data/args.batch_size
+	return h_p1.squeeze(),rec,sim_loss.data/args.batch_size, rec_loss.data/args.batch_size
 
 '''
 training the main network consisting of content encoder, pose encoder and decoder
@@ -217,7 +206,7 @@ def train_main_network(x):
         #print x_p1
         #print '-'*30
         #print rec
-        writer_train.add_embedding(h_p1.squeeze(), label_img=(rec),global_step=iteration)
+    writer_train.add_embedding(h_p1.squeeze(), label_img=(rec),global_step=iteration)
 
 
 	# scene discriminator loss
@@ -241,17 +230,18 @@ def train_main_network(x):
 '''
 train the model
 '''
-def model_train(train_generator):
+def model_train(train_generator,test_loader):
 	content_encoder.train()
 	pose_encoder.train()
 	decoder.train()
 	scene_discriminator.train()
-        global iteration 
+    
+	global iteration 
 	
-        for iteration in range(args.max_iter):
+    for iteration in range(args.max_iter):
 
 		
-                x = next(train_generator) # get the next input batch
+        x = next(train_generator) # get the next input batch
 
 		# train scene discriminator
 		sd_loss, sd_acc = train_scene_discriminator(x)
@@ -272,35 +262,26 @@ def model_train(train_generator):
 		# save the model weights for each of the components
 		if iteration % args.save_iters == 0:
 			
-	                content_encoder.eval()
-	                pose_encoder.eval()
-	                decoder.eval()
-	                scene_discriminator.eval()
-                        global iteration_test 
-	
-                        for iteration_tets in range(args.max_iter):
+	        content_encoder.eval()
+	        pose_encoder.eval()
+	        decoder.eval()
+	        scene_discriminator.eval()
 
-		
-                            x = next(train_generator) # get the next input batch
+			pose = []
+			image = []
 
-	                	# train scene discriminator
-		            sd_loss, sd_acc = train_scene_discriminator(x)
+			for idx,sequence in enumerate(test_loader):
+				x = utils.normalize_data(args, data_type, sequence)
+		        h_p1,rec,sim_loss, rec_loss = test_main_network(x)
+		        pose.append(h_p1)
+				image.append(rec)
 
-		            # train the main network
-		            sim_loss, rec_loss = train_main_network(x)
-
-		            iteration += 1
-
-		            # display the values
-		            print ('iteration: %d, sim loss: %0.8f, rec loss: %0.8f, sd loss: %0.8f, sd acc: %0.8f' 
-				%(iteration, sim_loss, rec_loss, sd_loss, sd_acc))
-
-		            # save the values in an external file which can be plotted later
-		            with open(os.path.join('saved_values', 'loss_and_acc_%s.txt'%(args.dataset)), mode='a') as f:
-			            f.write('%0.8f %0.8f %0.8f %0.8f\n'%(sim_loss, rec_loss, sd_loss, sd_acc))
-    
+		    pose = torch.cat(pose)
+			image = torch.cat(image)
+			print ('Test @ iteration: %d, sim loss: %0.8f, rec loss: %0.8f' %(iteration, sim_loss, rec_loss))
+			writer_test.add_embedding(pose, label_img=image,global_step=iteration)
                     
-                        save_dir = os.path.join(args.save_dir, 'iter_%d'%(iteration))
+            save_dir = os.path.join(args.save_dir, 'iter_%d'%(iteration))
 			if not os.path.exists(save_dir):
 				os.makedirs(save_dir)
 			torch.save(content_encoder.state_dict(),os.path.join(save_dir,'content_encoder.pth'))
@@ -367,7 +348,7 @@ def model_lstm_train(train_generator):
 if __name__ == '__main__':
 
 	# get the train and test generator from the data laoder
-	train_generator, test_generator = loader(args)
+	train_generator, test_loader = loader(args)
 
 	# is start_iter is not zero, then load the model from the given iteration
 	if args.start_iter != 0:
@@ -375,10 +356,11 @@ if __name__ == '__main__':
 		pose_encoder.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'pose_encoder.pth')), strict=False)
 		decoder.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'decoder.pth')), strict=False)
 		scene_discriminator.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'scene_discriminator.pth')), strict=False)
-                if args.use_lstm:
+        
+		if args.use_lstm:
 		    lstm.load_state_dict(torch.load(os.path.join(args.save_dir, 'iter_%d'%(args.start_iter), 'lstm.pth')), strict=False)
 
 	if args.use_lstm:
 		model_lstm_train(train_generator)
 	else:
-		model_train(train_generator)
+		model_train(train_generator,test_loader)

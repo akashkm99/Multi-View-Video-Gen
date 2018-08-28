@@ -34,11 +34,11 @@ def loader(args):
 	# use the pytorch dataloader for efficiently loading dataset
 	train_loader = DataLoader(train_data, num_workers=args.data_threads, batch_size=args.batch_size,
 								shuffle=True, drop_last=True, pin_memory=True)
-	test_loader = DataLoader(test_data, num_workers=args.data_threads, batch_size=args.batch_size,
+	test_loader = DataLoader(test_data, num_workers=args.data_threads, batch_size=args.batch_size_test,
 								shuffle=True, drop_last=True, pin_memory=True)
 
 	# get the generator functions for the training and testing data
 	train_generator = get_training_batch(train_loader, args)
-	test_generator = get_testing_batch(test_loader, args)
+	# test_generator = get_testing_batch(test_loader, args)
 
-	return train_generator, test_generator
+	return train_generator, test_loader
